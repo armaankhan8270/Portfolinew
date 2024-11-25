@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Enhanced Database Dependency Graph</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .node circle {
+            stroke: #fff;
+            stroke-width: 2px;
+        }
+        .node text {
+            font-size: 12px;
+            font-weight: 500;
+            font-family: system-ui, -apple-system, sans-serif;
+        }
+        .link {
+            fill: none;
+            stroke: #999;
+            stroke-opacity: 0.3;
+            stroke-width: 1.5px;
+            transition: all 0.3s;
+        }
+        .link.highlighted {
+            stroke-opacity: 0.8;
+            stroke-width: 2px;
+            stroke: #4f46e5;
+        }
+        .arrow {
+            fill: #999;
+        }
+        .node-group {
+            opacity: 1;
+            transition: all 0.3s;
+        }
+        .node-group.dimmed {
+            opacity: 0.2;
+        }
+        .level-group {
+            stroke: #e5e7eb;
+            stroke-width: 1;
+            fill: #f9fafb;
+            fill-opacity: 0.5;
+        }
+        .level-label {
+            font-size: 14px;
+            font-weight: 600;
+            fill: #6b7280;
+        }
+        .node-card {
+            fill: white;
+            stroke: #e5e7eb;
+            rx: 6;
+            ry: 6;
+            transition: all 0.3s;
+        }
+        .node-card:hover {
+            stroke: #4f46e5;
+            stroke-width: 2;
+        }
+        .minimap {
+            border: 1px solid #e5e7eb;
+            background: white;
+        }
+    </style>
+</head>
+<body class="bg-gray-50">
+    <div class="container mx-auto p-4">
+        <div class="bg-white rounded-xl shadow-lg p-6">
+            <div class="flex justify-between items-center mb-6">
+                <h1 class="text-2xl font-bold text-gray-900">Database Dependency Graph</h1>
+                <div class="flex space-x-4">
+                    <div class="flex items-center space-x-2">
+                        <label class="text-sm text-gray-600">Layout:</label>
+                        <select id="layoutSelect" class="text-sm border rounded p-1">
+                            <option value="hierarchical">Hierarchical</option>
+                            <option value="radial">Radial</option>
+                        </select>
+                    </div>
+                    <button id="zoomIn" class="bg-indigo-500 text-white px-4 py-2 rounded-lg hover:bg-indigo-600 transition">
+                        <span class="text-sm">Zoom In</span>
+                    </button>
+                    <button id="zoomOut" class="bg-indigo-500 text-white px-4 py-2 rounded-lg hover:bg-indigo-600 transition">
+                        <span class="text-sm">Zoom Out</span>
+                    </button>
+                    <button id="resetView" class="bg-gray-500 text-white px-4 py-2 rounded-lg hover:bg-gray-600 transition">
+                        <span class="text-sm">Reset</span>
+                    </button>
+                    <button id="toggleMinimap" class="bg-green-500 text-white px-4 py-2 rounded-lg hover:bg-green-600 transition">
+                        <span class="text-sm">Toggle Minimap</span>
+                    </button>
+                </div>
+            </div>
+            <div class="relative" style="height: 800px;">
+                <div id="graph" class="border rounded-xl bg-gray-50" style="height: 100%;"></div>
+                <div id="minimap" class="minimap absolute top-4 right-4 w-48 h-48 rounded-lg shadow-lg hidden"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const width = document.getElementById('graph').clientWidth;
+        const height = document.getElementById('graph').clientHeight;
+        const LEVEL_SPACING = width / 6;
+        const NODE_SPACING = 100;
+        
+        // Create main SVG
+        const svg = d3.select('#graph')
+            .append('svg')
+            .attr('width', width)
+            .attr('height', height);
+
+        // Create minimap
+        const minimapWidth = 192;
+        const minimapHeight = 192;
+        const minimap = d3.select('#minimap')
+            .append('svg')
+            .attr('width', minimapWidth)
+            .attr('height', minimapHeight);
+
+        // Add zoom behavior
+        const zoom = d3.zoom()
+            .scaleExtent([0.1, 4])
+            .on('zoom', (event) => {
+                container.attr('transform', event.transform);
+                updateMinimap(event.transform);
+            });
+
+        svg.call(zoom);
+
+        // Create containers
+        const container = svg.append('g');
+        const levelContainer = container.append('g');
+        const linkContainer = container.append('g');
+        const nodeContainer = container.append('g');
+
+        // Add arrow marker
+        svg.append('defs').append('marker')
+            .attr('id', 'arrow')
+            .attr('viewBox', '0 -5 10 10')
+            .attr('refX', 25)
+            .attr('refY', 0)
+            .attr('markerWidth', 8)
+            .attr('markerHeight', 8)
+            .attr('orient', 'auto')
+            .append('path')
+            .attr('d', 'M0,-5L10,0L0,5')
+            .attr('class', 'arrow');
+
+        function createHierarchicalLayout(data) {
+            const simulation = d3.forceSimulation(data.nodes)
+                .force('link', d3.forceLink(data.edges)
+                    .id(d => d.id)
+                    .distance(NODE_SPACING))
+                .force('charge', d3.forceManyBody().strength(-1000))
+                .force('x', d3.forceX(d => d.level * LEVEL_SPACING).strength(0.5))
+                .force('y', d3.forceY(height / 2).strength(0.1))
+                .force('collision', d3.forceCollide().radius(50));
+
+            return simulation;
+        }
+
+        function createRadialLayout(data) {
+            const simulation = d3.forceSimulation(data.nodes)
+                .force('link', d3.forceLink(data.edges)
+                    .id(d => d.id)
+                    .distance(NODE_SPACING))
+                .force('charge', d3.forceManyBody().strength(-1000))
+                .force('r', d3.forceRadial(d => d.level * LEVEL_SPACING / 2, width / 2, height / 2))
+                .force('collision', d3.forceCollide().radius(50));
+
+            return simulation;
+        }
+
+        // Load and render data
+        fetch('/api/graph-data')
+            .then(response => response.json())
+            .then(data => {
+                let simulation = createHierarchicalLayout(data);
+                
+                // Create level backgrounds
+                const maxLevel = d3.max(data.nodes, d => d.level);
+                const levels = Array.from({length: maxLevel + 1}, (_, i) => i);
+                
+                levelContainer.selectAll('.level-group')
+                    .data(levels)
+                    .join('rect')
+                    .attr('class', 'level-group')
+                    .attr('x', d => d * LEVEL_SPACING - LEVEL_SPACING/2)
+                    .attr('y', 0)
+                    .attr('width', LEVEL_SPACING)
+                    .attr('height', height);
+
+                levelContainer.selectAll('.level-label')
+                    .data(levels)
+                    .join('text')
+                    .attr('class', 'level-label')
+                    .attr('x', d => d * LEVEL_SPACING)
+                    .attr('y', 30)
+                    .attr('text-anchor', 'middle')
+                    .text(d => `Level ${d}`);
+
+                // Create links
+                const links = linkContainer
+                    .selectAll('.link')
+                    .data(data.edges)
+                    .join('path')
+                    .attr('class', 'link')
+                    .attr('marker-end', 'url(#arrow)');
+
+                // Create nodes
+                const nodes = nodeContainer
+                    .selectAll('.node-group')
+                    .data(data.nodes)
+                    .join('g')
+                    .attr('class', 'node-group')
+                    .call(d3.drag()
+                        .on('start', dragstarted)
+                        .on('drag', dragged)
+                        .on('end', dragended));
+
+                // Add node cards
+                nodes.append('rect')
+                    .attr('class', 'node-card')
+                    .attr('x', -50)
+                    .attr('y', -25)
+                    .attr('width', 100)
+                    .attr('height', 50);
+
+                // Add node circles
+                nodes.append('circle')
+                    .attr('r', 6)
+                    .attr('fill', d => {
+                        const colors = ['#4f46e5', '#06b6d4', '#10b981', '#8b5cf6', '#f59e0b'];
+                        return colors[d.level % colors.length];
+                    });
+
+                // Add node labels
+                nodes.append('text')
+                    .attr('dy', 5)
+                    .attr('text-anchor', 'middle')
+                    .text(d => d.name)
+                    .call(wrap, 90);
+
+                // Interaction handlers
+                nodes
+                    .on('mouseover', highlightConnections)
+                    .on('mouseout', resetHighlight);
+
+                function highlightConnections(event, d) {
+                    nodes.classed('dimmed', true);
+                    links.classed('highlighted', false).classed('dimmed', true);
+
+                    const connectedNodes = new Set();
+                    connectedNodes.add(d.id);
+                    
+                    links.each(function(l) {
+                        if (l.source.id === d.id || l.target.id === d.id) {
+                            connectedNodes.add(l.source.id);
+                            connectedNodes.add(l.target.id);
+                            d3.select(this)
+                                .classed('highlighted', true)
+                                .classed('dimmed', false)
+                                .raise();
+                        }
+                    });
+
+                    nodes.classed('dimmed', n => !connectedNodes.has(n.id));
+                    d3.select(this).raise();
+                }
+
+                function resetHighlight() {
+                    nodes.classed('dimmed', false);
+                    links.classed('highlighted', false).classed('dimmed', false);
+                }
+
+                // Update positions
+                simulation.on('tick', () => {
+                    links.attr('d', d => {
+                        const dx = d.target.x - d.source.x;
+                        const dy = d.target.y - d.source.y;
+                        const dr = Math.sqrt(dx * dx + dy * dy);
+                        return `M${d.source.x},${d.source.y}A${dr},${dr} 0 0,1 ${d.target.x},${d.target.y}`;
+                    });
+
+                    nodes.attr('transform', d => `translate(${d.x},${d.y})`);
+                });
+
+                // Layout switcher
+                document.getElementById('layoutSelect').addEventListener('change', (event) => {
+                    simulation.stop();
+                    simulation = event.target.value === 'hierarchical' 
+                        ? createHierarchicalLayout(data)
+                        : createRadialLayout(data);
+                    simulation.restart();
+                });
+
+                // Initial centering
+                const initialTransform = d3.zoomIdentity
+                    .translate(width/2 - LEVEL_SPACING, height/2)
+                    .scale(0.8);
+                svg.call(zoom.transform, initialTransform);
+
+                // Drag handlers
+                function dragstarted(event) {
+                    if (!event.active) simulation.alphaTarget(0.3).restart();
+                    event.subject.fx = event.subject.x;
+                    event.subject.fy = event.subject.y;
+                }
+
+                function dragged(event) {
+                    event.subject.fx = event.x;
+                    event.subject.fy = event.y;
+                }
+
+                function dragended(event) {
+                    if (!event.active) simulation.alphaTarget(0);
+                    event.subject.fx = null;
+                    event.subject.fy = null;
+                }
+
+                // Minimap
+                function updateMinimap(transform) {
+                    const minimapScale = Math.min(minimapWidth / width, minimapHeight / height);
+                    minimap.select('g').attr('transform', 
+                        `scale(${minimapScale}) translate(${-transform.x / transform.k},${-transform.y / transform.k})`);
+                }
+
+                const minimapContainer = minimap.append('g');
+                minimapContainer.append('rect')
+                    .attr('width', width)
+                    .attr('height', height)
+                    .attr('fill', 'none')
+                    .attr('stroke', '#e5e7eb');
+
+                // Toggle minimap
+                document.getElementById('toggleMinimap').onclick = () => {
+                    const minimapDiv = document.getElementById('minimap');
+                    minimapDiv.classList.toggle('hidden');
+                };
+            });
+
+        // Text wrapping function
+        function wrap(text, width) {
+            text.each(function() {
+                const text = d3.select(this);
+                const words = text.text().split(/\s+/);
+                const lines = [];
+                let line = [];
+                
+                words.forEach(word => {
+                    line.push(word);
+                    if (line.join(' ').length > width/8) {
+                        lines.push(line);
+                        line = [];
+                    }
+                });
+                if (line.length) lines.push(line);
+
+                text.text(null);
+                lines.forEach((line, i) => {
+                    text.append('tspan')
+                        .attr('x', 0)
+                        .attr('dy', i ? '1.2em' : '-0.6em')
+                        .text(line.join(' '));
+                });
+            });
+        }
+
+        // Zoom controls
+        document.getElementById('zoomIn').onclick = () => {
+            svg.transition().call(zoom.scaleBy, 1.5);
+        };
+
+        document.getElementById('zoomOut').onclick = () => {
+            svg.transition().call(zoom.scaleBy, 0.75);
+        };
+
+        document.getElementById('resetZoom').onclick = () => {
+            svg.transition().call(zoom.transform, d3.zoomIdentity
+                .translate(width/2, height/2)
+                .scale(0.8));
+        };
+    </script>
+</body>
+</html>
